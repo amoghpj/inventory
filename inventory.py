@@ -2,18 +2,22 @@
 """Inventory.
 
 Usage: 
-  inventory --list
-  inventory --show <name> 
-  inventory --added <name> --amount <aminput> [--date <dateinput>]
-  inventory --used <name> --amount <aminput> [--date <dateinput>]
+  inventory --list [--inventory-path=<path>]
+  inventory --show --record <name>  [--inventory-path=<path>]
+  inventory (--added | --used) --record <name> --amount <amount> [--notes=<notes> --date <date> --inventory-path=<path>]
+  inventory (--ordered | --delivered) --record <name> --amount <amount> [--notes=<notes> --date <date> --inventory-path=<path>]
+
 
 Options:
-  --list               List stocks
-  --show=<name>        Shows details of input
-  --added=<name>       Add details to input
-  --used=<name>        Add details to input
-  --date=<date>        User specified date, string
+  --list               List stocks 
+  --added              Specifies addition of new record, or new stock/order
+  --used               Specifies consumption of stock
+  --ordered            Specifies new order placed
+  --delivered          Specifies order was delivered
+  --record=<name>      Record name. Use --list to get overview
+  --date=<date>        User specified date, string YYYY-MM-DD
   --amount=<amount>    User specified amount, string
+  --inventory-path=<path>     Path to inventory files [default: ~/.inventory]
 """
 
 from docopt import docopt
@@ -22,91 +26,128 @@ import os
 import sys
 import datetime
 
-def list_all_records():
-    if not os.path.exists('.allrecords'):
-        with open(".allrecords", 'w') as out:
-            out.write("")
-    with open(".allrecords",'r') as inp:
-        records = [r.strip() for r in inp.readlines()]
-    return(records)
+class Settings:
+    def __init__(self, args):
+        home = os.path.expanduser('~')
+        self.path = args.get("--inventory-path").replace('~', home)
+        self.records_path = self.path + '/.allrecords'
+        self._verify_path()
+        self._read_records()
+        self.notes = args.get('--notes', None)
+        self.list_records = args.get('--list', None)
+        self.amount = args.get('--amount', None)
+        if args['--date']:
+            try:
+                date = datetime.datetime.strptime(args['--date'], "%Y-%m-%d")
+                self.date = date.strftime("%Y-%m-%d")
+            except:
+                print("Pleaes specify date as YYYY-MM-DD")
+                sys.exit()
+        else:
+            self.date = datetime.date.today().isoformat()
+        self.action = None
+        if args['--added']:
+            self.action = "added"
+        elif args['--used']:
+            self.action = "used"
+        elif args['--ordered']:
+            self.action = "ordered"
+        elif args['--delivered']:
+            self.action = "delivered"
 
-def normalize(chemical):
-    return(chemical.replace(" ", "-").lower())
+        if self.action in ["added", "used"]:
+            self.record_type = "stocks"
+        elif self.action in ["ordered", "delivered"]:
+            self.record_type = "orders"            
 
-def update_index(records, chemical):
-    if normalize(chemical) not in records:
-        with open(".allrecords", 'a') as out:
-            out.write(f"%s\n" % (normalize(chemical)))
-
-def update_details(chemical,
-                   amount,
-                   added=False,
-                   used=False,
-                   date=None):
-    chem_fname = "." + normalize(chemical)
-    if added:
-        action = "added"
-    elif used:
-        sign = "used"
-        
-    details = {"date":[datetime.date.today().isoformat()],
-               "amount":[amount],
-               "action":[action]}
-    
-    if os.path.exists(chem_fname):
-        df = pd.read_csv(chem_fname, sep=',',index_col=None)
-        df.append(details, ignore_index='True')
-    else:
-        df = pd.DataFrame(details)
-    df.to_csv(chem_fname,index=False)
-
-def show(records, chemical):
-    chem_fname = "." + normalize(chemical)
-    if not os.path.exists(chem_fname) and chem_fname not in records:
-        print("No records exist!")
-        sys.exit()
-    else:
-        df = pd.read_csv(chem_fname, index_col=None, sep=',')
-        amount = 0
-        for i, row in df.iterrows():
-            sign = row.action
-            if sign == "added":
-                amount += float(row.amount)
-            elif sign == "used":
-                amount -= float(row.amount)
-        # last made
-        for i,row in df[::-1].iterrows():
-            if row.action  == "added":
-                date = row.date
-                break
-        print("__%s__"           % (chemical))
-        print("Last made on: %s" % (date))
-        print("Amount left:  %0.1f" % (amount))
+        self.record = args.get('--record',None)
+        if self.record:
+            self._normalize()
             
-    
+    def _verify_path(self):
+        for p in self.path:
+            if not os.path.exists(p):
+                os.makedirs(p)
+
+        if not os.path.exists(self.records_path):
+            # touch
+            with open(self.records_path,  'w') as out:
+                out.write("date,amount,action,notes,record,type\n")
+
+    def _normalize(self):
+        self.normalized_record = self.record.replace(" ", "-").lower()
+        
+    def _read_records(self):
+        self.recordsdf = pd.read_csv(self.records_path,
+                            sep=',',
+                            index_col=None)
+                
+def update_records(settings):
+    details = {"date":settings.date,
+               "amount":settings.amount,
+               "action":settings.action,
+               "notes":settings.notes,
+               "record":settings.normalized_record,
+               "type":settings.record_type}
+    settings.recordsdf = settings.recordsdf.append(details, ignore_index=True)
+    settings.recordsdf.to_csv(settings.records_path,index=False)
+
+def list_records(settings):
+    stocksdf = settings.recordsdf
+    stocksdf = stocksdf.loc[(stocksdf["type"] == "stocks")]
+    stocksdf.drop("type",axis="columns",inplace=True)
+    stocksdf.reset_index(inplace=True)
+    print("Stocks")
+    for i, row in stocksdf.iterrows():
+        print(f"%s\t\t\t%s\t%s\t%ss" % (row.record, row.amount, row.action, row.date))
+    print("\n")
+    ordersdf = settings.recordsdf
+    ordersdf = ordersdf.loc[(ordersdf["type"] == "orders")]
+    ordersdf.drop("type",axis="columns",inplace=True)
+    ordersdf.reset_index(inplace=True)
+    print("Orders")
+    for i, row in ordersdf.iterrows():
+        print(f"%s\t\t\t%s\t%s\t%ss" % (row.record, row.amount, row.action, row.date))
+
+def show(settings):
+    df = settings.recordsdf
+    # filter
+    df = df[df.record == settings.normalized_record]
+    amount = get_current_amount(df)
+    # last made
+    date = None
+    for i,row in df[::-1].iterrows():
+        if row.action  == "added":
+            date = row.date
+            break
+
+    print("__%s__"           % (settings.record))
+    print("Last made on: %s" % (date))
+    print("Amount left:  %0.1f" % (amount))
+
+def get_current_amount(df):
+    amount = 0
+    for i, row in df.iterrows():
+        sign = row.action
+        if sign == "added":
+            amount += float(row.amount)
+        elif sign == "used":
+            amount -= float(row.amount)
+    return(amount)
+
 if __name__ == '__main__':
     args = docopt(__doc__, version='')
-    records = list_all_records()
-    
+    settings = Settings(args)
     if args['--list']:
-        if not records:
-            print("Nothing here yet...")
-            sys.exit()
-        for i, r in enumerate(records):
-            print("%d\t%s" % (i,r))
+        list_records(settings)
+    #     if not records:
+    #         print("Nothing here yet...")
+    #         sys.exit()
+    #     for i, r in enumerate(records):
+    #         print("%d\t%s" % (i,r))
 
     if args['--show']:
-        chemical = args['--show']        
-        show(records, chemical)
-        
-    if args['--added'] is not None:
-        chemical = args['--added']
-        amount = args['--amount']
-        update_index(records, chemical)
-        update_details(chemical, amount, added=True)
-
-    if args['--used'] is not None:
-        chemical = args['--used']
-        amount = args['--amount']
-        update_index(records, chemical)
-        update_details(chemical, amount, used=True)
+        show(settings)
+    
+    if settings.action is not None:
+        update_records(settings)
