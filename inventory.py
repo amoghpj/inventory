@@ -75,7 +75,7 @@ class Settings:
                 out.write("date,amount,action,notes,record,type\n")
 
     def _normalize(self):
-        self.normalized_record = self.record.replace(" ", "-").lower()
+        self.normalized_record = self.record.replace(" | ", "|").replace(" ", "-").lower()
         
     def _read_records(self):
         self.recordsdf = pd.read_csv(self.records_path,
@@ -92,22 +92,53 @@ def update_records(settings):
     settings.recordsdf = settings.recordsdf.append(details, ignore_index=True)
     settings.recordsdf.to_csv(settings.records_path,index=False)
 
-def list_records(settings):
-    stocksdf = settings.recordsdf
-    stocksdf = stocksdf.loc[(stocksdf["type"] == "stocks")]
+def list_stocks(settings):
+    stocksdf = settings.recordsdf.copy()
+    stocksdf = stocksdf.loc[stocksdf["type"] == "stocks"]
     stocksdf.drop("type",axis="columns",inplace=True)
     stocksdf.reset_index(inplace=True)
     print("Stocks")
+    records = pd.unique(stocksdf.record)
+    formatter = "{:>20}    {:>5}"
+    today = datetime.date.today()
+    for rec in records:
+        df = stocksdf.loc[stocksdf.record == rec]
+        amount = get_current_amount(df)
+        print(formatter.format(rec.replace('-',' '), amount))            
+
+def color_date(date):
+    d = datetime.datetime.strptime(date, "%Y-%m-%d")
+    if (today.timetuple().tm_yday - d.timetuple().tm_yday) > 30 and row.amount > 0:
+        dstr = "\033[31m" + d.strftime("%Y-%m-%d") + '\033[0m'
+    else:
+        dstr = d.strftime("%Y-%m-%d")
+    return(dstr)
+
+def show_timeline_stocks(settings):
+    stocksdf = settings.recordsdf.copy()
+    stocksdf = stocksdf.loc[stocksdf["type"] == "stocks"]
+    stocksdf.drop("type",axis="columns",inplace=True)
+    stocksdf.reset_index(inplace=True)
+    print("Stocks")
+    formatter = "{:>20}    {:>5}   {:>10}   {}"
+    today = datetime.date.today()    
     for i, row in stocksdf.iterrows():
-        print(f"%s\t\t\t%s\t%s\t%ss" % (row.record, row.amount, row.action, row.date))
+        print(formatter.format(row.record.replace('-',' '),
+                               row.amount,
+                               row.action,
+                               color_date(row.date)))    
+        
+def list_records(settings):
+    list_stocks(settings)
     print("\n")
-    ordersdf = settings.recordsdf
+    formatter = "{:>20}    {:>5}   {:>10}   {}"
+    ordersdf = settings.recordsdf.copy()
     ordersdf = ordersdf.loc[(ordersdf["type"] == "orders")]
     ordersdf.drop("type",axis="columns",inplace=True)
     ordersdf.reset_index(inplace=True)
     print("Orders")
     for i, row in ordersdf.iterrows():
-        print(f"%s\t\t\t%s\t%s\t%ss" % (row.record, row.amount, row.action, row.date))
+        print(formatter.format(row.record, row.amount, row.action, row.date))
 
 def show(settings):
     df = settings.recordsdf
@@ -140,11 +171,6 @@ if __name__ == '__main__':
     settings = Settings(args)
     if args['--list']:
         list_records(settings)
-    #     if not records:
-    #         print("Nothing here yet...")
-    #         sys.exit()
-    #     for i, r in enumerate(records):
-    #         print("%d\t%s" % (i,r))
 
     if args['--show']:
         show(settings)
